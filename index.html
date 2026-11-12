@@ -278,6 +278,7 @@
     html.light #profileModal label { color: #64748b; }
     html.light #profileModal input:not([type="file"]) { background: #ffffff; border-color: #cbd5e1; }
     html.light #profileModal #lockedUsername { background: #f1f5f9; }
+    html.light .profile-name-input { background: #ffffff; border-color: #cbd5e1; color: #0f172a; }
     html.light #cancelProfileBtn { border-color: #cbd5e1; }
 
     /* Schalter */
@@ -1046,9 +1047,6 @@
           </div>
           
           <div class="flex items-center gap-1">
-            <button id="openProfileModalBtn" type="button" title="Profil bearbeiten" class="p-2 text-slate-400 hover:text-sky-400 hover:bg-slate-900 rounded-lg transition flex-shrink-0">
-              <i class="fa-solid fa-pen text-xs"></i>
-            </button>
             <button id="openSettingsBtn" type="button" title="Einstellungen" class="p-2 text-slate-400 hover:text-sky-400 hover:bg-slate-900 rounded-lg transition flex-shrink-0">
               <i class="fa-solid fa-gear text-xs"></i>
             </button>
@@ -2305,6 +2303,7 @@
     }); }
     // --- Nachtrag: fehlende Uebersetzungen ---
     Object.assign(EXACT, {
+  "Anzeigename ändern": "Edit display name",
   "Aus: Enter macht eine neue Zeile, gesendet wird mit dem Pfeil-Knopf.": "Off: Enter adds a new line, send with the arrow button.",
   "Bildschirm teilen": "Share screen",
   "Bildschirmfreigabe wird von diesem Browser nicht unterstützt.": "Screen sharing is not supported by this browser.",
@@ -2325,6 +2324,7 @@
   "Messenger herunterladen": "Download messenger"
 });
     Object.assign(EXACT_RU, {
+  "Anzeigename ändern": "Изменить отображаемое имя",
   "Aus: Enter macht eine neue Zeile, gesendet wird mit dem Pfeil-Knopf.": "Выкл.: Enter переносит строку, отправка — кнопкой со стрелкой.",
   "Bildschirm teilen": "Показать экран",
   "Bildschirmfreigabe wird von diesem Browser nicht unterstützt.": "Этот браузер не поддерживает показ экрана.",
@@ -3325,7 +3325,7 @@
       goOfflineThenSignOut();
     });
 
-    openProfileModalBtn.addEventListener('click', async (e) => {
+    openProfileModalBtn?.addEventListener('click', async (e) => {
       e.stopPropagation();
       if (!currentUser) return;
       editUsernameInput.value = document.getElementById('userDisplayName').textContent;
@@ -3746,8 +3746,20 @@
       document.getElementById('viewBannerActions').classList.toggle('hidden', !isSelf);
       document.getElementById('viewBannerRemoveBtn').classList.toggle('hidden', !d.bannerUrl);
       document.getElementById('viewBannerMsg').classList.add('hidden');
-      document.getElementById('viewProfileName').innerHTML = escapeHtml(name) +
+      const nameBlockHtml = escapeHtml(name) +
         (d.verified === true ? ` <i class="fa-solid fa-circle-check text-sky-400 text-base align-middle" title="${escapeHtml(tr('Verifiziert'))}" aria-label="${escapeHtml(tr('Verifiziert'))}"></i>` : '');
+      if (isSelf && editField === 'displayName') {
+        document.getElementById('viewProfileName').innerHTML = `<div class="flex items-center gap-2">
+            <input type="text" id="viewNameInput" maxlength="40" data-no-i18n value="${escapeHtml(name)}" placeholder="${escapeHtml(tr('z. B. Max Mustermann'))}" class="profile-name-input flex-1 min-w-0 px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-base font-semibold text-white focus:outline-none focus:border-sky-400">
+            <button type="button" id="viewNameSaveBtn" class="px-3 py-1.5 bg-sky-500 hover:bg-sky-400 disabled:opacity-50 rounded-lg text-xs font-semibold text-white">${escapeHtml(tr('Speichern'))}</button>
+            <button type="button" id="viewNameCancelBtn" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs font-semibold text-slate-200">${escapeHtml(tr('Abbrechen'))}</button>
+          </div>
+          <div id="viewNameMsg" class="text-[11px] font-normal text-red-400 mt-1"></div>`;
+      } else {
+        document.getElementById('viewProfileName').innerHTML = nameBlockHtml + (isSelf
+          ? ` <button type="button" id="viewNameEditBtn" title="${escapeHtml(tr('Anzeigename ändern'))}" aria-label="${escapeHtml(tr('Anzeigename ändern'))}" class="ml-1 inline-flex items-center justify-center w-7 h-7 rounded-lg text-slate-400 hover:text-sky-400 hover:bg-slate-800/70 align-middle transition"><i class="fa-solid fa-pen text-xs"></i></button>`
+          : '');
+      }
       document.getElementById('viewProfileHandle').textContent = d.username ? '@' + d.username : '';
       document.getElementById('viewProfileStatus').textContent = userGone ? '' : lastSeenText(d);
 
@@ -3905,6 +3917,44 @@ const birthdayLocale = localeMap[settings.lang] || 'en-GB';
         });
         document.getElementById('viewBirthdayCancelBtn').addEventListener('click', () => openUserProfile(currentUser.uid));
         dayEl.focus();
+      }
+      const nameEditBtn = document.getElementById('viewNameEditBtn');
+      if (nameEditBtn) nameEditBtn.addEventListener('click', () => openUserProfile(currentUser.uid, 'displayName'));
+      if (isSelf && editField === 'displayName') {
+        const nameInput = document.getElementById('viewNameInput');
+        const nameSaveBtn = document.getElementById('viewNameSaveBtn');
+        const nameMsg = document.getElementById('viewNameMsg');
+        const saveDisplayName = async () => {
+          const newName = nameInput.value.trim();
+          if (newName.length < 2) { nameMsg.textContent = tr('Der Anzeigename muss mindestens 2 Zeichen enthalten.'); return; }
+          nameSaveBtn.disabled = true;
+          nameMsg.textContent = '';
+          try {
+            currentUser.updateProfile({ displayName: newName }).catch(() => {});
+            const data = { uid: currentUser.uid, displayName: newName, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+            if (!ownHasUsername) data.username = usernameFromEmail(currentUser);
+            await Promise.race([
+              db.collection(getPublicCollectionPath('users')).doc(currentUser.uid).set(data, { merge: true }),
+              new Promise((resolve) => setTimeout(resolve, 4000))
+            ]);
+            if (usersById[currentUser.uid]) usersById[currentUser.uid].displayName = newName;
+            document.getElementById('userDisplayName').textContent = newName;
+            const sideAvatar = document.getElementById('userAvatar');
+            if (sideAvatar && !sideAvatar.querySelector('img')) sideAvatar.textContent = newName.charAt(0).toUpperCase();
+            openUserProfile(currentUser.uid);
+          } catch (err) {
+            nameMsg.textContent = err && err.code === 'permission-denied' ? tr('Keine Berechtigung (permission-denied)') : tr('Speichern fehlgeschlagen');
+            nameSaveBtn.disabled = false;
+          }
+        };
+        nameSaveBtn.addEventListener('click', saveDisplayName);
+        document.getElementById('viewNameCancelBtn').addEventListener('click', () => openUserProfile(currentUser.uid));
+        nameInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); saveDisplayName(); }
+          else if (e.key === 'Escape') { e.stopPropagation(); openUserProfile(currentUser.uid); }
+        });
+        nameInput.focus();
+        nameInput.select();
       }
       const blockBtn = document.getElementById('viewProfileBlockBtn');
       blockBtn.dataset.uid = uid;
